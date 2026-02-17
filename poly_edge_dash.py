@@ -59,7 +59,9 @@ def gbm_prob_above(S0, K, T, mu, sigma):
     if sigma == 0:
         return 100 if S0 >= K else 0
     d2 = (np.log(S0 / K) + (mu - 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    return stats.norm.cdf(d2) * 100
+    prob = stats.norm.cdf(d2) * 100
+    prob = max(1, min(99, prob))  # Avoid extremes 0/100 for realism
+    return prob
 
 
 def predict_prob(df, input_price, horizon_secs):
