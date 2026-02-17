@@ -1,7 +1,7 @@
 """
 TradingView-style chart: Green/red direction, prominent current/input hlines (thick white current, dashed colored input), smooth spline, minimal clutter.
 1s updates (optimized: single thick spline + sparse overlays). Overbought/oversold price zones (±1% mean). Prob for input/horizon.
-Enhanced readability: Thicker lines, bold labels, contrasting colors, light grid.
+Default zoom: Y-axis ±50 from mean for closer view on BTC moves.
 Run: streamlit run poly_edge_dash.py
 """
 import os
@@ -24,6 +24,7 @@ GREEN = "#26a69a"
 RED = "#f23645"
 WHITE = "#ffffff"
 LIGHT_GRAY = "#363a45"
+ZOOM_RANGE = 50  # ±50 $ on y-axis default for closer zoom
 
 
 def get_binance_btc():
@@ -54,31 +55,35 @@ def get_chainlink_polygon_btc():
     return get_binance_btc()
 
 
+def gbm_prob_above(S0, K, T, mu, sigma):
+    if sigma == 0:
+        return 100 if S0 >= K else 0
+    d2 = (np.log(S0 / K) + (mu - 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    return stats.norm.cdf(d2) * 100
+
+
 def predict_prob(df, input_price, horizon_secs):
-    if len(df) < 10:
-        return 50, "Low data"
-    recent = df.tail(10)
+    if len(df) < 10 or input_price <= 0:
+        return 50, "Low data or invalid input"
+
+    recent = df.tail(10)['price'].values
+    returns = np.log(recent[1:] / recent[:-1])
+    dt = 1 / 3600  # per second to hour
+    mu = np.mean(returns) / dt if len(returns) > 0 else -0.001  # default bear if low data
+    sigma = np.std(returns) / np.sqrt(dt) if len(returns) > 0 else 0.005  # default vol
+    T = horizon_secs / 3600  # to hours
+    S0 = recent[-1]
+
+    prob = gbm_prob_above(S0, input_price, T, mu, sigma)
+    
+    # Conf from linregress for R2/std
     times = np.arange(len(recent))
-    prices = recent['price'].values
-    slope, intercept, r_value, _, _ = stats.linregress(times, prices)
-    predict_price = intercept + slope * (len(times) + horizon_secs)
-    mean_p = np.mean(prices)
-    trend_boost = min(45, max(-45, (slope / mean_p) * 1000))
-    prob_above = min(95, max(5, 50 + trend_boost))
-    
-    # EMA boost
-    ema_short = pd.Series(prices).ewm(span=5).mean().iloc[-1]
-    ema_long = pd.Series(prices).ewm(span=15).mean().iloc[-1]
-    ema_boost = 10 if ema_short > ema_long else -10
-    prob_above += ema_boost
-    prob_above = min(95, max(5, prob_above))
-    
-    # Vol confidence
-    std = np.std(prices)
-    z = (input_price - predict_price) / std if std > 0 else 0
-    conf = stats.norm.cdf(z) * 100  # Prob below; 100 - for above
+    slope, _, r_value, _, _ = stats.linregress(times, recent)
+    std = np.std(recent)
     r2 = r_value**2
-    return min(95, max(5, 100 - conf)), f"R²={r2:.2f} | Std={std:.2f}"
+    conf = f"R²={r2:.2f} | Std={std:.2f}"
+    
+    return prob, conf
 
 
 def make_chart(df: pd.DataFrame, input_price: float, current_price: float | None, height: int, title: str):
@@ -169,8 +174,9 @@ def make_chart(df: pd.DataFrame, input_price: float, current_price: float | None
             tickfont=dict(color="#d1d4dc", size=12),
             tickformat=",.0f",
             separatethousands=True,
+            range=[mean_price - ZOOM_RANGE, mean_price + ZOOM_RANGE] # Default zoom ±50
         ),
-        margin=dict(l=80, r=80, t=50, b=50),  # Extra margin for bold labels
+        margin=dict(l=80, r=80, t=50, b=50), # Extra margin for bold labels
         height=height,
         showlegend=False,
         hovermode="x unified",
@@ -198,7 +204,7 @@ if "chart_df" not in st.session_state:
     st.session_state.chart_df = pd.DataFrame(columns=["time", "price"])
 new_row = pd.DataFrame({"time": [now], "price": [price if price is not None else np.nan]})
 st.session_state.chart_df = pd.concat([st.session_state.chart_df, new_row], ignore_index=True)
-st.session_state.chart_df = st.session_state.chart_df.tail(HISTORY_POINTS)  # Persist full history
+st.session_state.chart_df = st.session_state.chart_df.tail(HISTORY_POINTS) # Persist full history
 df_all = st.session_state.chart_df.dropna(subset=["price"])
 if df_all.empty:
     df_all = pd.DataFrame({"time": [now], "price": [price or 0]})
@@ -221,20 +227,26 @@ st.markdown("---")
 
 with st.sidebar:
     input_price = st.number_input("Input price (horizontal line)", value=0.0, step=100.0, min_value=0.0, format="%.2f")
-    horizon = st.slider("Predict Horizon (s)", 1, 300, 300)
+    col1, col2 = st.columns(2)
+    with col1:
+        minutes = st.number_input("Minutes", min_value=0, max_value=5, value=0, step=1)
+    with col2:
+        seconds = st.number_input("Seconds", min_value=0, max_value=59, value=0, step=1)
+    horizon = minutes * 60 + seconds
+    horizon = max(1, min(horizon, 300))
     st.caption("Set input >0 for prob calc (colored hline: red below current, green above).")
 
 # Single Chart: Full history with prominent lines + overbought/oversold zones
-fig = make_chart(df_all, input_price, price, height=500, title="BTC Price (Smooth, Zoomable)")
+fig = make_chart(df_all, input_price, price, height=600, title="BTC Price (Smooth, Zoomable)")
 st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": True, "displaylogo": False, "modeBarButtonsToRemove": ["pan2d", "lasso2d"]})
 
 # Prob Calc & Edge (if input set)
 if input_price > 0 and len(df_all) >= 10:
-    prob_above, conf = predict_prob(df_all, input_price, horizon)
-    st.metric("Prob > Input at Horizon", f"{prob_above:.0f}%", conf)
-    if prob_above > 60:
+    prob, conf = predict_prob(df_all, input_price, horizon)
+    st.metric("Probability of future price staying up or above input price is", f"{prob:.0f}%", conf)
+    if prob > 50:
         st.success("Edge: BUY UP (Above Input)")
-    elif prob_above < 40:
+    elif prob < 50:
         st.error("Edge: BUY DOWN (Below Input)")
     else:
         st.info("HOLD - Neutral")
