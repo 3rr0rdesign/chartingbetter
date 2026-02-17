@@ -124,7 +124,9 @@ def make_chart(df: pd.DataFrame, input_price: float, current_price: float | None
     
     # Input price hline (dashed, colored red below current, green above, bold left label)
     if input_price > 0:
-        hline_color = RED if input_price < current_price else GREEN if input_price > current_price else WHITE
+        hline_color = WHITE
+        if current_price is not None:
+            hline_color = RED if input_price < current_price else GREEN if input_price > current_price else WHITE
         fig.add_hline(
             y=input_price,
             line_dash="dash",
