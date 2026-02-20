@@ -27,11 +27,21 @@ LIGHT_GRAY = "#363a45"
 ZOOM_RANGE = 50  # ±50 $ on y-axis default for closer zoom
 
 
+def get_binance_btc():
+    try:
+        r = requests.get(BINANCE_URL, timeout=3)
+        if r.status_code == 200:
+            return float(r.json().get("price", 0))
+    except Exception:
+        pass
+    return None
+
+
 def get_chainlink_polygon_btc():
     rpc = os.environ.get("RPC_URL", "https://polygon-rpc.com")
     try:
         from web3 import Web3
-        w3 = Web3(Web3.HTTPProvider(rpc))
+        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 5}))
         if w3.is_connected():
             contract = w3.eth.contract(
                 address=Web3.to_checksum_address(CHAINLINK_POLYGON_ADDRESS),
@@ -39,16 +49,6 @@ def get_chainlink_polygon_btc():
             )
             _, answer, _, _, _ = contract.functions.latestRoundData().call()
             return float(answer) / 1e8
-    except Exception:
-        pass
-    return None
-
-
-def get_binance_btc():
-    try:
-        r = requests.get(BINANCE_URL, timeout=3)
-        if r.status_code == 200:
-            return float(r.json().get("price", 0))
     except Exception:
         pass
     return None
@@ -65,7 +65,9 @@ def gbm_prob_above(S0, K, T, mu, sigma):
     if sigma == 0:
         return 100 if S0 >= K else 0
     d2 = (np.log(S0 / K) + (mu - 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    return stats.norm.cdf(d2) * 100
+    prob = stats.norm.cdf(d2) * 100
+    prob = max(1, min(99, prob))  # Avoid extremes 0/100 for realism
+    return prob
 
 
 def predict_prob(df, input_price, horizon_secs):
