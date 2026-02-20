@@ -1,0 +1,16 @@
+﻿# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local caches / backtest artifacts
+.cache/
+*.json
+*.csv
+*.txt
